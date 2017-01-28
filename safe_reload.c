@@ -13,10 +13,18 @@
  *	1:	HAProxy PID file
  *	2:	HAproxy executable path
  *	3:	List of "VIP1:port1:tag1,VIP2:port2:tag2,...."
- *		E.g.: ./mb_parent /var/run/ha1/pid /usr/sbin/haproxy \
+ *		E.g.: ./safe_reload /var/run/ha1/pid /usr/sbin/haproxy \
  *			10.47.8.252:80:FD_HOST1,10.47.8.252:443:FD_HOST2
- *			-f /etc/haproxy/haproxy-mb.cfg
+ *			-f /etc/haproxy/haproxy-safe-reload.cfg
  *	4-n:	haproxy arguments (no -sf or -p options, we add it ourselves)
+ *
+ * To reload the configuration, do the following steps:
+ *	1. Make required modifications to the configuration file.
+ *	2. Find the process id of safe_reload program - say 'P'
+ *	3. Run "kill -USR1 $P
+ *
+ *	Step #2 and #3 can be merged with:
+ *		pkill -USR1 safe_reload
  */
 
 /* Constants for array sizes */
