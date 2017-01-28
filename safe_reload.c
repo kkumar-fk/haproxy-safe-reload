@@ -53,6 +53,7 @@ static char tags[MAX_VIPS][VIP_SIZE];
 
 /* Globals required */
 static char *executable_path;
+static char *my_name;
 static char *pid_file;
 
 /* Inform main() that a configuration reload is required */
@@ -73,7 +74,7 @@ static void print_args(char *args[])
 {
 	int i = 0;
 
-	printf("STARTING WITH: ");
+	printf("%s is going to invoke: ", my_name);
 	while (args[i]) {
 		printf("%s ", args[i]);
 		i++;
@@ -159,7 +160,7 @@ static void child_signal_handler(void)
  * "10.47.0.1:80:FD_HOST1,10.47.0.1:443:FD_HOST2,10.47.0.2:80:FD_HOST3"
  * Save each entry in the global arrays to be used later.
  */
-int parse_arguments(char *prog_name, char *arguments)
+int parse_arguments(char *arguments)
 {
 	int count = 0;
 	char *vip_start, *vip_end;
@@ -215,7 +216,7 @@ int parse_arguments(char *prog_name, char *arguments)
 
 		if (count == MAX_VIPS) {
 			fprintf(stderr, "%s: Supports atmost %d vips\n",
-				prog_name, MAX_VIPS);
+				my_name, MAX_VIPS);
 			exit(1);
 		}
 
@@ -294,11 +295,12 @@ void main(int argc, char *argv[])
 	if (argc <= 5)
 		usage(argv[0]);
 
+	my_name = argv[0];
 	pid_file = argv[1];
 	executable_path = argv[2];
 	arguments = argv[3];
 
-	total = parse_arguments(argv[0], arguments);
+	total = parse_arguments(arguments);
 
 	do_setup(total);
 
