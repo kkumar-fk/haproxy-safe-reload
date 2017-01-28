@@ -1,5 +1,7 @@
 		Safe HAProxy reload without dropping connections
-		--------------------------------------------------
+		______________________________________________________
+		
+		
 
 
 'safe_reload' implements safe reload of haproxy. Invoke with the following
