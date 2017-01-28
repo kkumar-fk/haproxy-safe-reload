@@ -1,8 +1,9 @@
-		Safe HAProxy reload without dropping connections
-		______________________________________________________
-		
-		
+	Safe HAProxy reload without dropping new connections
+	-----------------------------------------------------
 
+
+A. Introduction:
+----------------
 
 'safe_reload' implements safe reload of haproxy. Invoke with the following
 arguments:
@@ -15,8 +16,7 @@ arguments:
 	automatically using the pid file).
 
 
-
-A. Command line to invoke safe_reload:
+B. Command line to invoke safe_reload:
 ---------------------------------------
 
 	safe_reload /var/run/ha1/pid /usr/sbin/haproxy \
@@ -26,26 +26,26 @@ A. Command line to invoke safe_reload:
 		-f /etc/haproxy/haproxy_backend.cfg
 
 
-
-B. HAProxy configuration to enable safe-reload:
+C. HAProxy configuration to enable safe-reload:
 -----------------------------------------------
 
 The frontend section in the HAProxy configuration file is modified as
 follows:
 
-        frontend fk-safe-reload
+        frontend service-safe-reload
 		bind "fd@${FD_HOST1}"
 		...
 
-	frontend fk-safe-reload-ssl
-		bind "fd@${FD_HOST2}" ssl crt /etc/ssl/haproxy/ssl-file
+	frontend safe-reload-ssl
+		service-bind "fd@${FD_HOST2}" ssl crt /etc/ssl/service.pem
 		...
-	etc...
 
+	etc...
 
 
 C. Test script to safely reload haproxy:
 ----------------------------------------
+
 	#!/bin/bash
 
 	pid=`pgrep mb_parent`
@@ -60,9 +60,13 @@ C. Test script to safely reload haproxy:
 
 D. TODO:
 ---------
+
+	- Improve code to pass correct arguments to 'reload_signal_handler'.
+	- Code to parse arguments can be made more robust. String parsing
+	  to be made robust if wrong string is passed.
+	- To be integration with systemd.
+	- Improve option/arguments/command-line arguments.
 	- Test multiple safe-reload invocations on same configuration files.
 	- Effect of 'nbproc' to be tested.
-	- Integration with systemd
-	- Improve option/arguments/command-line arguments.
-	- Test results (before and after).
+	- Test connection drop results - before and after.
 	- Other things to implement.
