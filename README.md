@@ -67,3 +67,4 @@ D. TODO:
 	- Effect of 'nbproc' to be tested.
 	- Test connection drop results - before and after.
 	- Other things to implement.
+	- Can lua script be used to act as master for reload?
