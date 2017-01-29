@@ -62,7 +62,7 @@ static char tags[MAX_VIPS][VIP_SIZE];
 static char *executable_path;
 static char *my_name;
 static char *pid_file;
-FILE *logfp;
+static FILE *logfp;
 
 /* Inform main() that a configuration reload is required */
 static void reload_handler(int arg)
