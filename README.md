@@ -1,4 +1,4 @@
-A. Introduction:
+A. Introdduction:
 ----------------
 
 'safe_reload' implements safe reload of haproxy, where new connections
