@@ -29,6 +29,7 @@ C. HAProxy configuration to enable safe-reload:
 The frontend section in the HAProxy configuration file is modified as
 follows:
 
+
         frontend service-safe-reload
 		bind "fd@${FD_HOST1}"
 		...
