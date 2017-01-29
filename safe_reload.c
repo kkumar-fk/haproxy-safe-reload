@@ -31,8 +31,9 @@
 
 /* Constants for array sizes */
 #define MAX_ARGS		32
-#define MAX_VIPS		64
-#define VIP_SIZE		128
+#define MAX_VIPS		1024	/* Max vips in the config file */
+#define VIP_SIZE		32
+#define TAG_SIZE		32	/* Size of the tag */
 
 /* Constants for parsing input */
 #define COMMA			','
@@ -44,8 +45,8 @@
 #define LOGFILE			"/var/log/safe_reload.log"
 
 /* For signal handling */
-volatile sig_atomic_t reload_signal = 1;
-volatile sig_atomic_t child_signal = 0;
+static volatile sig_atomic_t reload_signal = 1;
+static volatile sig_atomic_t child_signal = 0;
 
 /*
  * This is initialized internally from socket fd's created and
@@ -56,7 +57,7 @@ static int  fds[MAX_VIPS];
 /* These are initialized from parameters supplied by the user */
 static char vip_ips[MAX_VIPS][VIP_SIZE];
 static int  vip_ports[MAX_VIPS];
-static char tags[MAX_VIPS][VIP_SIZE];
+static char tags[MAX_VIPS][TAG_SIZE];
 
 /* Globals required */
 static char *executable_path;
@@ -125,9 +126,8 @@ static int get_haproxy_pid()
 /* Implement HAProxy reload by starting a new process.
  *
  * TODO: 
- *	- Send argv[5] onwards?
  *	- Integrate to haproxy directly?
- *	- Logging
+ *	- Fork return value < 0
  */
 static void reload_signal_handler(int argc, char *argv[])
 {
@@ -183,7 +183,7 @@ static void child_signal_handler(void)
  * "10.47.0.1:80:FD_HOST1,10.47.0.1:443:FD_HOST2,10.47.0.2:80:FD_HOST3"
  * Save each entry in the global arrays to be used later.
  */
-int parse_arguments(char *my_arguments)
+static int parse_arguments(char *my_arguments)
 {
 	int count = 0;
 	char *vip_start, *vip_end;
@@ -249,13 +249,11 @@ int parse_arguments(char *my_arguments)
 	return count;
 }
 
-void do_setup(int total)
+static void do_setup(int total)
 {
 	int i;
 	int opt = 1;
-	struct sockaddr_in server;
 	char fdbuffer[8];
-	char tag_buffer[128];
 
 	signal(SIGUSR1, reload_handler);
 	signal(SIGCHLD, child_handler);
@@ -266,6 +264,8 @@ void do_setup(int total)
 	}
 
 	for (i = 0; i < total; i++) {
+		struct sockaddr_in server;
+
 		if ((fds[i] = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 			perror("socket");
 			exit(1);
@@ -283,11 +283,13 @@ void do_setup(int total)
 			exit(1);
 		}
 
-		/* TODO: Use inet_aton(), inet_pton(3), or getaddrinfo(3) */
-
 		server.sin_family = AF_INET;
-		server.sin_addr.s_addr = inet_addr(vip_ips[i]);
 		server.sin_port = htons(vip_ports[i]);
+		if (inet_pton(AF_INET, vip_ips[i], &server.sin_addr) != 1) {
+			perror("inet_pton");
+			fprintf(stderr, "%s: inet_pton failed\n", vip_ips[i]);
+			exit(1);
+		}
 
 		if (bind(fds[i], (struct sockaddr *)&server,
 			 sizeof(server)) < 0) {
