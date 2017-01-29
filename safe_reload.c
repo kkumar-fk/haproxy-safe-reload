@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <time.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -11,11 +13,11 @@
 /* Arguments provided by the user are:
  *	0:	This program name (by the system)
  *	1:	HAProxy PID file
- *	2:	HAproxy executable path
- *	3:	List of "VIP1:port1:tag1,VIP2:port2:tag2,...."
- *		E.g.: ./safe_reload /var/run/ha1/pid /usr/sbin/haproxy \
+ *	2:	List of "VIP1:port1:tag1,VIP2:port2:tag2,...."
+ *		E.g.: ./safe_reload /var/run/ha1/pid \
  *			10.47.8.252:80:FD_HOST1,10.47.8.252:443:FD_HOST2
- *			-f /etc/haproxy/haproxy-safe-reload.cfg
+ *			/usr/sbin/haproxy -f /etc/haproxy/hap-safe-reload.cfg
+ *	3:	HAproxy executable path
  *	4-n:	haproxy arguments (no -sf or -p options, we add it ourselves)
  *
  * To reload the configuration, do the following steps:
@@ -33,8 +35,13 @@
 #define VIP_SIZE		128
 
 /* Constants for parsing input */
-#define COMMA	','
-#define COLON	':'
+#define COMMA			','
+#define COLON			':'
+#define NEW_LINE		'\n'
+
+/* Logging */
+#define DATE_STRING_LEN		64	/* atleast 26 bytes */
+#define LOGFILE			"/var/log/safe_reload.log"
 
 /* For signal handling */
 volatile sig_atomic_t reload_signal = 1;
@@ -55,6 +62,7 @@ static char tags[MAX_VIPS][VIP_SIZE];
 static char *executable_path;
 static char *my_name;
 static char *pid_file;
+FILE *logfp;
 
 /* Inform main() that a configuration reload is required */
 static void reload_handler(int arg)
@@ -68,20 +76,38 @@ static void child_handler(int arg)
 	child_signal = 1;
 }
 
-#if DEBUG
-/* Print arguments being passed while invoking haproxy */
-static void print_args(char *args[])
+static void get_printable_time(char *date_string)
+{
+	struct timeval date;
+	struct tm tm;
+
+	gettimeofday(&date, NULL);
+	localtime_r(&date.tv_sec, &tm);
+
+	if (asctime_r(&tm, date_string) == NULL)
+		bzero(date_string, sizeof(date_string));
+	else if (date_string[strlen(date_string) - 1] == NEW_LINE)
+		date_string[strlen(date_string) - 1] = 0;
+}
+
+/* Log action */
+static void log_action(char *args[])
 {
 	int i = 0;
+	char date_string[DATE_STRING_LEN];
 
-	printf("%s is going to invoke: ", my_name);
+	get_printable_time(date_string);
+
+	fprintf(logfp, "%s: %s is going to reload configuration.\n",
+		date_string, my_name);
+	fprintf(logfp, "\tArguments: ");
 	while (args[i]) {
-		printf("%s ", args[i]);
+		fprintf(logfp, "%s ", args[i]);
 		i++;
 	}
-	printf("\n");
+	fprintf(logfp, "\n");
+	fflush(logfp);
 }
-#endif
 
 static int get_haproxy_pid()
 {
@@ -101,21 +127,19 @@ static int get_haproxy_pid()
  * TODO: 
  *	- Send argv[5] onwards?
  *	- Integrate to haproxy directly?
+ *	- Logging
  */
 static void reload_signal_handler(int argc, char *argv[])
 {
 	char *args[MAX_ARGS];
 	char pid_buffer[8];
-	int i, pid, index;
+	int pid, index;
 
 	/* Can race with a new reload, but should not matter? */
 	reload_signal = 0;
 
-	args[0] = executable_path;
-
-	for (i = 4; i < argc; i++)
-		args[i - 3] = argv[i];
-	index = i - 3;
+	for (index = 0; index < argc; index++)
+		args[index] = argv[index];
 
 	pid = get_haproxy_pid();
 	args[index++] = "-p";
@@ -127,11 +151,10 @@ static void reload_signal_handler(int argc, char *argv[])
 		args[index++] = pid_buffer;
 	}
 
-	args[index++] = NULL;
+	args[index] = NULL;
 
-#if DEBUG
-	print_args(args);
-#endif
+	/* Add a log entry */
+	log_action(args);
 
 	if (fork() == 0) {
 		/* New process -> Child */
@@ -156,11 +179,11 @@ static void child_signal_handler(void)
 }
 
 /*
- * Parse arguments giving the vip:port:tag:vip:port:tag, e.g.:
+ * Parse my_arguments giving the vip:port:tag:vip:port:tag, e.g.:
  * "10.47.0.1:80:FD_HOST1,10.47.0.1:443:FD_HOST2,10.47.0.2:80:FD_HOST3"
  * Save each entry in the global arrays to be used later.
  */
-int parse_arguments(char *arguments)
+int parse_arguments(char *my_arguments)
 {
 	int count = 0;
 	char *vip_start, *vip_end;
@@ -168,34 +191,34 @@ int parse_arguments(char *arguments)
 	char *tag_start, *tag_end;
 	char port[128];
 
-	while (*arguments) {
-		while (*arguments && *arguments != COMMA) {
-			vip_start = arguments;
-			while (*arguments && *arguments != COLON )
-				arguments ++;
-			if (*arguments != COLON) {
+	while (*my_arguments) {
+		while (*my_arguments && *my_arguments != COMMA) {
+			vip_start = my_arguments;
+			while (*my_arguments && *my_arguments != COLON )
+				my_arguments ++;
+			if (*my_arguments != COLON) {
 				fprintf(stderr, "Bad input at VIP\n");
 				exit(1);
 			}
-			vip_end = arguments - 1;
+			vip_end = my_arguments - 1;
 
-			port_start = ++arguments;
-			while (*arguments && *arguments != COLON )
-				arguments ++;
-			if (*arguments != COLON) {
+			port_start = ++my_arguments;
+			while (*my_arguments && *my_arguments != COLON )
+				my_arguments ++;
+			if (*my_arguments != COLON) {
 				fprintf(stderr, "Bad input at PORT\n");
 				exit(1);
 			}
-			port_end = arguments - 1;
+			port_end = my_arguments - 1;
 
-			tag_start = ++arguments;
-			while (*arguments && *arguments != COMMA )
-				arguments ++;
-			if (*arguments && *arguments != COMMA) {
+			tag_start = ++my_arguments;
+			while (*my_arguments && *my_arguments != COMMA )
+				my_arguments ++;
+			if (*my_arguments && *my_arguments != COMMA) {
 				fprintf(stderr, "Bad input at TAG\n");
 				exit(1);
 			}
-			tag_end = arguments - 1;
+			tag_end = my_arguments - 1;
 
 			strncpy(vip_ips[count], vip_start,
 				vip_end - vip_start + 1);
@@ -211,7 +234,7 @@ int parse_arguments(char *arguments)
 		}
 
 		++count;
-		if (!*arguments || *arguments == ' ')
+		if (!*my_arguments || *my_arguments == ' ')
 			break;
 
 		if (count == MAX_VIPS) {
@@ -220,7 +243,7 @@ int parse_arguments(char *arguments)
 			exit(1);
 		}
 
-		arguments ++;
+		my_arguments ++;
 	}
 
 	return count;
@@ -236,6 +259,11 @@ void do_setup(int total)
 
 	signal(SIGUSR1, reload_handler);
 	signal(SIGCHLD, child_handler);
+
+	if ((logfp = fopen(LOGFILE, "a")) == NULL) {
+		perror(LOGFILE);
+		exit(1);
+	}
 
 	for (i = 0; i < total; i++) {
 		if ((fds[i] = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -282,14 +310,14 @@ void do_setup(int total)
 static void usage(char *name)
 {
 	fprintf(stderr,
-		"%s pid-file haproxy-path vip-port-tag-args <haproxy-args>\n",
+		"%s pid-file vip-port-tag-args haproxy-path <haproxy-args>\n",
 		name);
 	exit(1);
 }
 
 void main(int argc, char *argv[])
 {
-	char *arguments;
+	char *my_arguments;
 	int total;
 
 	if (argc <= 5)
@@ -297,22 +325,40 @@ void main(int argc, char *argv[])
 
 	my_name = argv[0];
 	pid_file = argv[1];
-	executable_path = argv[2];
-	arguments = argv[3];
+	my_arguments = argv[2];
+	executable_path = argv[3];
 
-	total = parse_arguments(arguments);
+	total = parse_arguments(my_arguments);
 
 	do_setup(total);
+
+	if (daemon(1, 1)) {
+		/* Failed to daemonize, do it ourselves */
+		if (fork()) {
+			/* Parent - exit */
+			exit(0);
+		}
+
+		/* Child -> Start a new session and continue */
+		setsid();
+	}
 
 	/*
 	 * Wait till there is a signal from user to reload, or from a 
 	 * child that it has exited.
 	 */
 	while (1) {
-		if (reload_signal)
-			reload_signal_handler(argc, argv);
-		if (child_signal)
+
+		/* Need configuration reload? */
+		if (reload_signal) {
+			/* Send arguments starting from haproxy executable */
+			reload_signal_handler(argc - 3, &argv[3]);
+		}
+
+		/* Need to reap child? */
+		if (child_signal) {
 			child_signal_handler();
+		}
 		pause();
 	}
 }

@@ -6,9 +6,9 @@ are not dropped during a reload. safe_reload is in charge of starting
 haproxy process. Invoke with the following arguments:
 
 1:   HAProxy PID file (run time pid file, or a new file to store pid)
-2:   HAproxy executable path
-3:   List of vip,port,tag as arguments, E.g.:
+2:   List of vip,port,tag as arguments, E.g.:
 	10.47.8.252:80:FD_HOST1,10.47.8.252:443:FD_HOST2
+3:   HAproxy executable path
 4-n: haproxy arguments (no -sf or -p options, safe_reload will add it
 	automatically using the pid file).
 
@@ -16,9 +16,9 @@ haproxy process. Invoke with the following arguments:
 B. Command line to invoke safe_reload:
 ---------------------------------------
 
-	safe_reload /var/run/ha1/pid /usr/sbin/haproxy \
+	safe_reload /var/run/ha1/pid \
 		10.0.0.1:80:FD_HOST1,10.0.0.2:443:FD_HOST2,20.0.0.10:80:FD_HOST3,20.0.0.11:443:FD_HOST4 \
-		-f /etc/haproxy/haproxy_global.cfg \
+		/usr/sbin/haproxy -f /etc/haproxy/haproxy_global.cfg \
 		-f /etc/haproxy/haproxy_frontend.cfg \
 		-f /etc/haproxy/haproxy_backend.cfg
 
