@@ -56,7 +56,32 @@ C. Test script to safely reload haproxy:
 	exit 0
 
 
-D. TODO:
+D. Configuration supported/not-supported:
+-----------------------------------------
+
+1. Multiple safe-reload invocations on same configuration files - works.
+2. Sending SIGUSR1 to any safe-reload processes - works.
+3. 'nbproc' - does not work (as parser needs to be provided the run path
+	for each process).
+
+
+E. Testing done:
+-----------------
+
+1. Test on multiple safe-reload
+2. Signals to multiple safe-reload processes.
+3. Performance testing.
+4. Logging of multiple safe-reload done.
+
+
+F. Configd/other utility changes:
+----------------------------------
+
+TBD. Essentially, for a reload, configd needs to find the correct safe_reload
+process and send a SIGUSR1 signal to it.
+
+
+F. TODO:
 ---------
 
 	- Improve code to pass correct arguments to 'reload_signal_handler'.
@@ -64,8 +89,5 @@ D. TODO:
 	  to be made robust if wrong string is passed.
 	- To be integration with systemd.
 	- Improve option/arguments/command-line arguments.
-	- Test multiple safe-reload invocations on same configuration files.
-	- Effect of 'nbproc' to be tested.
 	- Test connection drop results - before and after.
-	- Other things to implement.
-	- Can lua script be used to act as master for reload?
+	- Others?
