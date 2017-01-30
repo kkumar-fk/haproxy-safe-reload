@@ -100,7 +100,8 @@ E. Testing done:
 
 			Safe HAProxy reload:
 	Number of 100% success runs:	158/158 iterations
-	Total requests:			7800000 + 7800000 = 15600000 (% increase)
+	Total requests:			7800000 + 7800000 = 15600000
+						(634% increase)
 	Total failures:			0
 	Failure rate:			0%
 
