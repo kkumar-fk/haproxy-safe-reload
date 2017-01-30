@@ -16,18 +16,15 @@
  *	1:	HAProxy PID file
  *	2:	List of "VIP1:port1:tag1,VIP2:port2:tag2,...."
  *		E.g.: ./safe_reload /var/run/ha1/pid \
- *			10.47.8.252:80:FD_HOST1,10.47.8.252:443:FD_HOST2
+ *			10.47.8.252:80:FD_HOST1,10.47.8.252:443:FD_HOST2 \
  *			/usr/sbin/haproxy -f /etc/haproxy/hap-safe-reload.cfg
  *	3:	HAproxy executable path
  *	4-n:	haproxy arguments (no -sf or -p options, we add it ourselves)
  *
  * To reload the configuration, do the following steps:
- *	1. Make required modifications to the configuration file.
- *	2. Find the process id of safe_reload program - say 'P'
+ *	1. Make required modifications to the required configuration file.
+ *	2. Find the process id of the required safe_reload program - say 'P'
  *	3. Run "kill -USR1 $P
- *
- *	Step #2 and #3 can be merged with:
- *		pkill -USR1 safe_reload
  */
 
 /* Constants for array sizes */
@@ -79,6 +76,7 @@ static void child_handler(int arg)
 	child_signal = 1;
 }
 
+/* Return a string containing the current date and time */
 static void get_printable_time(char *date_string)
 {
 	struct timeval date;
@@ -93,6 +91,7 @@ static void get_printable_time(char *date_string)
 		date_string[strlen(date_string) - 1] = 0;
 }
 
+/* Log information or errors */
 static void log_info(char *msg)
 {
 	char date_string[DATE_STRING_LEN];
@@ -101,10 +100,11 @@ static void log_info(char *msg)
 
 	fprintf(logfp, "%s: %s (%d): %s\n", date_string, my_name, getpid(),
 		msg);
+	fprintf(logfp, "--------------------------------------------------\n");
 	fflush(logfp);
 }
 
-/* Log action */
+/* Log the reconfiguration action with it's arguments */
 static void log_action_arguments(char *args[])
 {
 	int index = 0;
@@ -114,15 +114,17 @@ static void log_action_arguments(char *args[])
 
 	fprintf(logfp, "%s: %s (%d) is going to reload configuration.\n",
 		date_string, my_name, getpid());
-	fprintf(logfp, "\tArguments: ");
+	fprintf(logfp, "Arguments: ");
 	while (args[index]) {
 		fprintf(logfp, "%s ", args[index]);
 		index++;
 	}
 	fprintf(logfp, "\n");
+	fprintf(logfp, "--------------------------------------------------\n");
 	fflush(logfp);
 }
 
+/* Return the PID of current haproxy process, or 0 if none */
 static int get_haproxy_pid()
 {
 	FILE *fp = fopen(pid_file, "r");
@@ -136,7 +138,7 @@ static int get_haproxy_pid()
 	return pid;
 }
 
-/* Implement HAProxy reload by starting a new process. */
+/* Delayed handler to implement safe HAProxy reload. */
 static void reload_signal_handler(int argc, char *argv[])
 {
 	char *args[MAX_ARGS];
@@ -199,6 +201,7 @@ static void reload_signal_handler(int argc, char *argv[])
 	signal(SIGUSR1, reload_handler);
 }
 
+/* Delayed handler when a child exits */
 static void child_signal_handler(void)
 {
 	int status;
@@ -211,10 +214,9 @@ static void child_signal_handler(void)
 }
 
 /*
- * Parse my_arguments of the form "vip:port:tag:vip:port:tag". E.g.:
- * "10.47.0.1:80:FD_HOST1,10.47.0.1:443:FD_HOST2,10.47.0.2:80:FD_HOST3"
+ * Parse my_arguments of the form "vip:port:tag,vip:port:tag". E.g.:
+ * "10.47.0.1:80:FD_HOST1,10.47.0.1:443:FD_HOST2,10.47.0.2:80:FD_HOST3".
  * Save each entry in the global arrays to be used later.
- * TODO: Fix this to make this better.
  */
 static int parse_arguments(char *my_arguments)
 {
@@ -259,11 +261,12 @@ static int parse_arguments(char *my_arguments)
 
 			strncpy(port, port_start, port_end - port_start + 1);
 			port[port_end - port_start + 1] = 0;;
-			vip_ports[count] = atoi(port);
 
 			strncpy(tags[count], tag_start,
 				tag_end - tag_start + 1);
 			tags[count][tag_end - tag_start + 1] = 0;;
+
+			vip_ports[count] = atoi(port);
 		}
 
 		if (!*my_arguments || *my_arguments == ' ')
@@ -281,6 +284,14 @@ static int parse_arguments(char *my_arguments)
 	return count;
 }
 
+/*
+ * Perform various actions:
+ *	1. Setup signal handlers.
+ *	2. Open sockets for each VIP.
+ *	3. Set socket options for REUSEADDR/REUSEPORT
+ *	4. Bind each socket to the VIP:port, but do not LISTEN
+ *	5. Export the tag environment variable with the fd of this socket.
+ */
 static void do_setup(int total)
 {
 	int i, ret;
@@ -345,6 +356,7 @@ static void usage(char *name)
 	exit(1);
 }
 
+/* Open the log file for appending messages. */
 static void enable_logging(void)
 {
 	if ((logfp = fopen(LOGFILE, "a")) == NULL) {
@@ -367,6 +379,8 @@ void main(int argc, char *argv[])
 	executable_path = argv[3];
 
 	enable_logging();
+
+	log_info("Starting up");
 
 	total = parse_arguments(my_arguments);
 	if (!total) {
@@ -397,7 +411,6 @@ void main(int argc, char *argv[])
 	 * child that it has exited.
 	 */
 	while (1) {
-
 		/* Need configuration reload? */
 		if (reload_signal) {
 			/* Send arguments starting from haproxy executable */
@@ -408,6 +421,8 @@ void main(int argc, char *argv[])
 		if (child_signal) {
 			child_signal_handler();
 		}
+
+		/* Do nothing till another signal arrives */
 		pause();
 	}
 }
