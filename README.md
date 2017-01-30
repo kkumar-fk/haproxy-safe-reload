@@ -72,6 +72,37 @@ E. Testing done:
 2. Signals to multiple safe-reload processes.
 3. Performance testing.
 4. Logging of multiple safe-reload done.
+5. Test results:
+	Note: Pause between reloads need to be very small to catch errors
+	during an actual reload, and not show success during the non-reload
+	times. Otherwise we measure connections drop during non-reload times
+	which is almost always 0, and is useless. Increase frequency of
+	reload even more to find actual failure rate during a reload. The
+	test script does:
+
+	1. Reload haproxy every 300 ms (haproxy-1.6.3 used for both tests)
+	2. Run ab from 2 different baremetals using this script:
+		while :
+		do
+			ab -c 10000 -n 100000 http://10.47.8.252/128
+		done > /tmp/out 2>&1 &
+		sleep 600
+		kill %%
+	3. Calculate percentage failure:
+
+	Results on 16.04 box:
+	---------------------
+			Original HAProxy reload:
+	Number of 100% success runs:	0/3765 iterations
+	Total requests:			279104 + 1844826 = 2123930
+	Total failures:			3765
+	Failure rate:			3765/2123930*100 = 0.18%
+
+			Safe HAProxy reload:
+	Number of 100% success runs:	158/158 iterations
+	Total requests:			7800000 + 7800000 = 15600000 (% increase)
+	Total failures:			0
+	Failure rate:			0%
 
 
 F. Configd/other utility changes:
@@ -84,10 +115,7 @@ process and send a SIGUSR1 signal to it.
 F. TODO:
 ---------
 
-	- Improve code to pass correct arguments to 'reload_signal_handler'.
+	- Improve option/arguments/command-line arguments.
 	- Code to parse arguments can be made more robust. String parsing
 	  to be made robust if wrong string is passed.
 	- To be integration with systemd.
-	- Improve option/arguments/command-line arguments.
-	- Test connection drop results - before and after.
-	- Others?
