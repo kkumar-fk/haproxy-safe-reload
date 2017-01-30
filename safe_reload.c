@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <errno.h>
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
@@ -34,6 +35,7 @@
 #define MAX_VIPS		1024	/* Max vips in the config file */
 #define VIP_SIZE		32
 #define TAG_SIZE		32	/* Size of the tag */
+#define ERROR_SIZE		256	/* Size of error message */
 
 /* Constants for parsing input */
 #define COMMA			','
@@ -91,20 +93,31 @@ static void get_printable_time(char *date_string)
 		date_string[strlen(date_string) - 1] = 0;
 }
 
-/* Log action */
-static void log_action(char *args[])
+static void log_info(char *msg)
 {
-	int i = 0;
 	char date_string[DATE_STRING_LEN];
 
 	get_printable_time(date_string);
 
-	fprintf(logfp, "%s: %s is going to reload configuration.\n",
-		date_string, my_name);
+	fprintf(logfp, "%s: %s (%d): %s\n", date_string, my_name, getpid(),
+		msg);
+	fflush(logfp);
+}
+
+/* Log action */
+static void log_action_arguments(char *args[])
+{
+	int index = 0;
+	char date_string[DATE_STRING_LEN];
+
+	get_printable_time(date_string);
+
+	fprintf(logfp, "%s: %s (%d) is going to reload configuration.\n",
+		date_string, my_name, getpid());
 	fprintf(logfp, "\tArguments: ");
-	while (args[i]) {
-		fprintf(logfp, "%s ", args[i]);
-		i++;
+	while (args[index]) {
+		fprintf(logfp, "%s ", args[index]);
+		index++;
 	}
 	fprintf(logfp, "\n");
 	fflush(logfp);
@@ -123,20 +136,30 @@ static int get_haproxy_pid()
 	return pid;
 }
 
-/* Implement HAProxy reload by starting a new process.
- *
- * TODO: 
- *	- Integrate to haproxy directly?
- *	- Fork return value < 0
- */
+/* Implement HAProxy reload by starting a new process. */
 static void reload_signal_handler(int argc, char *argv[])
 {
 	char *args[MAX_ARGS];
 	char pid_buffer[8];
-	int pid, index;
+	int pid, index, ret;
 
-	/* Can race with a new reload, but should not matter? */
 	reload_signal = 0;
+
+#ifdef SIGNAL_RACE
+	/*
+	 * This function could have a small race with a new reload, but this
+	 * should not matter. We will atmost do an unnecessary reload as an
+	 * effect of this race. Hence this code is commented out for now.
+	 */
+	
+	/* First mask signals */
+	sigfillset(&mask_set);
+	sigprocmask(SIG_SETMASK, &mask_set, &old_set);
+	/* Then execute all the steps */
+	/* ... */
+	/* Then unmask signals */
+	sigprocmask(SIG_SETMASK, &old_set, NULL);
+#endif
 
 	for (index = 0; index < argc; index++)
 		args[index] = argv[index];
@@ -153,14 +176,23 @@ static void reload_signal_handler(int argc, char *argv[])
 
 	args[index] = NULL;
 
-	/* Add a log entry */
-	log_action(args);
+	/* Add a log entry for action and arguments */
+	log_action_arguments(args);
 
-	if (fork() == 0) {
+	if ((ret = fork()) == 0) {
+		char error_string[ERROR_SIZE];
+
 		/* New process -> Child */
 		execvp(args[0], args);
-		perror("execvp");
+
+		/* Should never reach here */
+		strcpy(error_string, argv[0]);
+		strcat(error_string, ": ");
+		strcat(error_string, strerror(errno));
+		log_info(error_string);
 		exit(1);
+	} else if (ret < 0) {
+		log_info("Unable to reconfigure due to fork failure");
 	}
 
 	/* Parent returns to pause for more signals, or exit */
@@ -179,9 +211,10 @@ static void child_signal_handler(void)
 }
 
 /*
- * Parse my_arguments giving the vip:port:tag:vip:port:tag, e.g.:
+ * Parse my_arguments of the form "vip:port:tag:vip:port:tag". E.g.:
  * "10.47.0.1:80:FD_HOST1,10.47.0.1:443:FD_HOST2,10.47.0.2:80:FD_HOST3"
  * Save each entry in the global arrays to be used later.
+ * TODO: Fix this to make this better.
  */
 static int parse_arguments(char *my_arguments)
 {
@@ -233,11 +266,10 @@ static int parse_arguments(char *my_arguments)
 			tags[count][tag_end - tag_start + 1] = 0;;
 		}
 
-		++count;
 		if (!*my_arguments || *my_arguments == ' ')
 			break;
 
-		if (count == MAX_VIPS) {
+		if (++count == MAX_VIPS) {
 			fprintf(stderr, "%s: Supports atmost %d vips\n",
 				my_name, MAX_VIPS);
 			exit(1);
@@ -251,17 +283,12 @@ static int parse_arguments(char *my_arguments)
 
 static void do_setup(int total)
 {
-	int i;
+	int i, ret;
 	int opt = 1;
 	char fdbuffer[8];
 
 	signal(SIGUSR1, reload_handler);
 	signal(SIGCHLD, child_handler);
-
-	if ((logfp = fopen(LOGFILE, "a")) == NULL) {
-		perror(LOGFILE);
-		exit(1);
-	}
 
 	for (i = 0; i < total; i++) {
 		struct sockaddr_in server;
@@ -285,9 +312,10 @@ static void do_setup(int total)
 
 		server.sin_family = AF_INET;
 		server.sin_port = htons(vip_ports[i]);
-		if (inet_pton(AF_INET, vip_ips[i], &server.sin_addr) != 1) {
-			perror("inet_pton");
-			fprintf(stderr, "%s: inet_pton failed\n", vip_ips[i]);
+		ret = inet_pton(AF_INET, vip_ips[i], &server.sin_addr);
+		if (ret != 1) {
+			fprintf(stderr, "inet_pton for VIP: %s, ret: %d\n",
+				vip_ips[i], ret);
 			exit(1);
 		}
 
@@ -317,6 +345,14 @@ static void usage(char *name)
 	exit(1);
 }
 
+static void enable_logging(void)
+{
+	if ((logfp = fopen(LOGFILE, "a")) == NULL) {
+		perror(LOGFILE);
+		exit(1);
+	}
+}
+
 void main(int argc, char *argv[])
 {
 	char *my_arguments;
@@ -330,15 +366,26 @@ void main(int argc, char *argv[])
 	my_arguments = argv[2];
 	executable_path = argv[3];
 
+	enable_logging();
+
 	total = parse_arguments(my_arguments);
+	if (!total) {
+		log_info("No VIPs found in arguments");
+		fprintf(stderr, "No VIPs found in arguments\n");
+		exit(1);
+	}
 
 	do_setup(total);
 
 	if (daemon(1, 1)) {
+		int ret;
+
 		/* Failed to daemonize, do it ourselves */
-		if (fork()) {
+		if ((ret = fork()) > 0) {
 			/* Parent - exit */
 			exit(0);
+		} else if (ret < 0) {
+			log_info("Unable to daemonize due to fork failure");
 		}
 
 		/* Child -> Start a new session and continue */
