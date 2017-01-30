@@ -267,12 +267,16 @@ static int parse_arguments(char *my_arguments)
 			tags[count][tag_end - tag_start + 1] = 0;;
 
 			vip_ports[count] = atoi(port);
+
+			++count;
+			if (!*my_arguments)
+				break;
 		}
 
-		if (!*my_arguments || *my_arguments == ' ')
+		if (!*my_arguments)
 			break;
 
-		if (++count == MAX_VIPS) {
+		if (count == MAX_VIPS) {
 			fprintf(stderr, "%s: Supports atmost %d vips\n",
 				my_name, MAX_VIPS);
 			exit(1);
@@ -281,6 +285,7 @@ static int parse_arguments(char *my_arguments)
 		my_arguments ++;
 	}
 
+out:
 	return count;
 }
 
