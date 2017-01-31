@@ -33,6 +33,8 @@
 #define VIP_SIZE		32
 #define TAG_SIZE		32	/* Size of the tag */
 #define ERROR_SIZE		256	/* Size of error message */
+#define NUM_PIDS		128	/* Maximum nbproc setting */
+#define PID_BUFFER_SIZE		16	/* Integer size at most */
 
 /* Constants for parsing input */
 #define COMMA			','
@@ -124,26 +126,39 @@ static void log_action_arguments(char *args[])
 	fflush(logfp);
 }
 
-/* Return the PID of current haproxy process, or 0 if none */
-static int get_haproxy_pid()
+/*
+ * Copy the list of PIDs of current haproxy process's into pids, and return
+ * the count of running processes.
+ */
+static int get_haproxy_pid(char pids[][PID_BUFFER_SIZE])
 {
 	FILE *fp = fopen(pid_file, "r");
-	int pid = 0;
+	char tmp[PID_BUFFER_SIZE];
+	int  npids = 0;
 
 	if (fp) {
-		fscanf(fp, "%d", &pid);
+		while (fscanf(fp, "%s", tmp) == 1) {
+			if (npids == NUM_PIDS) {
+				log_info("Too many pids, not sending more");
+				break;
+			}
+
+			strcpy(pids[npids], tmp);
+			npids++;
+		}
+
 		fclose(fp);
 	}
 
-	return pid;
+	return npids;
 }
 
 /* Delayed handler to implement safe HAProxy reload. */
 static void reload_signal_handler(int argc, char *argv[])
 {
 	char *args[MAX_ARGS];
-	char pid_buffer[8];
-	int pid, index, ret;
+	char pid_buffer[NUM_PIDS][PID_BUFFER_SIZE];
+	int  p, npids, index, ret;
 
 	reload_signal = 0;
 
@@ -166,14 +181,15 @@ static void reload_signal_handler(int argc, char *argv[])
 	for (index = 0; index < argc; index++)
 		args[index] = argv[index];
 
-	pid = get_haproxy_pid();
+	npids = get_haproxy_pid(pid_buffer);
 	args[index++] = "-p";
 	args[index++] = pid_file;
 
-	if (pid) {
-		sprintf(pid_buffer, "%d", pid);
+	if (npids) {
 		args[index++] = "-sf";
-		args[index++] = pid_buffer;
+		for (p = 0; p < npids; p++)
+			args[index++] = pid_buffer[p];
+
 	}
 
 	args[index] = NULL;
