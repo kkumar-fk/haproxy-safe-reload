@@ -12,7 +12,7 @@
 #include <arpa/inet.h>
 
 /*
- * Followign are the arguments provided by the user:
+ * The following arguments are provided by the user:
  *
  *	0:	This program name (by the system)
  *	1:	HAProxy PID file
