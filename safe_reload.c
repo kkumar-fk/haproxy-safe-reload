@@ -11,7 +11,9 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 
-/* Arguments provided by the user are:
+/*
+ * Followign are the arguments provided by the user:
+ *
  *	0:	This program name (by the system)
  *	1:	HAProxy PID file
  *	2:	List of "VIP1:port1:tag1,VIP2:port2:tag2,...."
@@ -21,10 +23,14 @@
  *	3:	HAproxy executable path
  *	4-n:	haproxy arguments (no -sf or -p options, we add it ourselves)
  *
- * To reload the configuration, do the following steps:
- *	1. Make required modifications to the required configuration file.
+ * All arguments from #3 onwards are passed to haproxy unmodified. We also add
+ * HAProxy's '-p' and '-sf' options with correct arguments, and these should
+ * not be provided by the invoker.
+ *
+ * Execute the following steps to reload the configuration:
+ *	1. Make modifications as needed to the required configuration file.
  *	2. Find the process id of the required safe_reload program - say 'P'
- *	3. Run "kill -USR1 $P
+ *	3. Run: "kill -USR1 $P"
  *
  * For use with nbproc, the configuration file has these contents, for e.g.
  * with nbproc=3:
@@ -32,12 +38,12 @@
  * global
  *	nbproc 3
  * 
- * frontend fe
+ * frontend fe-safe
  *	bind "fd@${FD_HOST1}" process 1
  *	bind "fd@${FD_HOST2}" process 2
  *	bind "fd@${FD_HOST2}" process 3
  * 
- * Invoke as: safe_reload /var/run/ha/pid \
+ * Invoke as: safe_reload /var/run/ha1/pid \
  * 10.47.8.252:80:FD_HOST1,10.47.8.252:80:FD_HOST2,10.47.8.252:80:FD_HOST3 \
  * /usr/sbin/haproxy -f haproxy-safe-nbproc.cfg
  */
