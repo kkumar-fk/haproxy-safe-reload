@@ -25,6 +25,21 @@
  *	1. Make required modifications to the required configuration file.
  *	2. Find the process id of the required safe_reload program - say 'P'
  *	3. Run "kill -USR1 $P
+ *
+ * For use with nbproc, the configuration file has these contents, for e.g.
+ * with nbproc=3:
+ *
+ * global
+ *	nbproc 3
+ * 
+ * frontend fe
+ *	bind "fd@${FD_HOST1}" process 1
+ *	bind "fd@${FD_HOST2}" process 2
+ *	bind "fd@${FD_HOST2}" process 3
+ * 
+ * Invoke as: safe_reload /var/run/ha/pid \
+ * 10.47.8.252:80:FD_HOST1,10.47.8.252:80:FD_HOST2,10.47.8.252:80:FD_HOST3 \
+ * /usr/sbin/haproxy -f haproxy-safe-nbproc.cfg
  */
 
 /* Constants for array sizes */
