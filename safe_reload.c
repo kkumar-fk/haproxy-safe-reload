@@ -49,13 +49,13 @@
  */
 
 /* Constants for array sizes */
-#define MAX_ARGS		32
-#define MAX_VIPS		1024	/* Max vips in the config file */
-#define VIP_SIZE		32
-#define TAG_SIZE		32	/* Size of the tag */
-#define ERROR_SIZE		256	/* Size of error message */
-#define NUM_PIDS		128	/* Maximum nbproc setting */
-#define PID_BUFFER_SIZE		16	/* Integer size at most */
+#define MAX_VIPS		1024		/* Max vips in config file */
+#define VIP_SIZE		32		/* Length of IP address */
+#define TAG_SIZE		32		/* Size of the tag */
+#define ERROR_SIZE		256		/* Size of error message */
+#define NUM_PIDS		128		/* Maximum nbproc setting */
+#define MAX_ARGS		(32 + NUM_PIDS)	/* To be given to haproxy */
+#define PID_BUFFER_SIZE		16		/* Integer size at most */
 
 /* Constants for parsing input */
 #define COMMA			','
@@ -208,9 +208,9 @@ static void reload_signal_handler(int argc, char *argv[])
 
 	if (npids) {
 		args[index++] = "-sf";
+		/* TODO: Make sure args does not overflow */
 		for (p = 0; p < npids; p++)
 			args[index++] = pid_buffer[p];
-
 	}
 
 	args[index] = NULL;

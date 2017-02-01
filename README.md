@@ -5,11 +5,11 @@ A. Introduction:
 are not dropped during a reload. safe_reload is in charge of starting
 haproxy process. Invoke with the following arguments:
 
-1:   HAProxy PID file (run time pid file, or a new file to store pid)
-2:   List of vip,port,tag as arguments, E.g.:
+1)   HAProxy PID file (run time pid file, or a new file to store pid)
+2)   List of vip,port,tag as arguments, E.g.:
 	10.47.8.252:80:FD_HOST1,10.47.8.252:443:FD_HOST2
-3:   HAproxy executable path
-4-n: haproxy arguments (no -sf or -p options, safe_reload will add it
+3)   HAproxy executable path
+4-n) haproxy arguments (no -sf or -p options, safe_reload will add it
 	automatically using the pid file).
 
 
@@ -73,9 +73,9 @@ with nbproc=3:
 	frontend fe-safe
 		bind "fd@${FD_HOST1}" process 1
 		bind "fd@${FD_HOST2}" process 2
-		bind "fd@${FD_HOST2}" process 3
+		bind "fd@${FD_HOST3}" process 3
 
-	Invoke as:
+Invoke safe_reload as follows:
 	safe_reload /var/run/ha1/pid \
 	10.47.8.25:80:FD_HOST1,10.47.8.25:80:FD_HOST2,10.47.8.25:80:FD_HOST3 \
 	/usr/sbin/haproxy -f haproxy-safe-nbproc.cfg
@@ -86,7 +86,7 @@ E. Configuration supported:
 
 1. Multiple safe-reload invocations on same configuration files - works.
 2. Sending SIGUSR1 to any safe-reload processes - works.
-3. 'nbproc' - tested and work fine.
+3. 'nbproc' - tested and works fine.
 
 
 F. Testing done:
