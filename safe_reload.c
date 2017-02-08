@@ -54,7 +54,9 @@
 #define TAG_SIZE		32		/* Size of the tag */
 #define ERROR_SIZE		256		/* Size of error message */
 #define NUM_PIDS		128		/* Maximum nbproc setting */
-#define MAX_ARGS		(32 + NUM_PIDS)	/* To be given to haproxy */
+#define MAX_HAPROXY_ARGS	32		/* Max haproxy args */
+#define MAX_ARGS		(MAX_HAPROXY_ARGS + NUM_PIDS + 4)
+				/* "+ 4" for "-p <file> -sf" and NULL args */
 #define PID_BUFFER_SIZE		16		/* Integer size at most */
 
 /* Constants for parsing input */
@@ -179,7 +181,7 @@ static void reload_signal_handler(int argc, char *argv[])
 {
 	char *args[MAX_ARGS];
 	char pid_buffer[NUM_PIDS][PID_BUFFER_SIZE];
-	int  p, npids, index, ret;
+	int  pid, npids, index, ret;
 
 	reload_signal = 0;
 
@@ -210,10 +212,10 @@ static void reload_signal_handler(int argc, char *argv[])
 
 	/* Finally reload option with -sf and list of pids */
 	if (npids) {
+		/* NOTE: args should not overflow */
 		args[index++] = "-sf";
-		/* TODO: Make sure args does not overflow */
-		for (p = 0; p < npids; p++)
-			args[index++] = pid_buffer[p];
+		for (pid = 0; pid < npids; pid++)
+			args[index++] = pid_buffer[pid];
 	}
 
 	/* Terminate arguments and invoke haproxy */
@@ -416,8 +418,13 @@ void main(int argc, char *argv[])
 	char *my_arguments;
 	int total;
 
-	if (argc <= 5)
+	if (argc <= 5) {
 		usage(argv[0]);
+	} else if (argc -3 > MAX_HAPROXY_ARGS) {
+		fprintf(stderr, "%s: Maximum of %d arguments for haproxy\n",
+			argv[0], MAX_HAPROXY_ARGS);
+		exit(1);
+	}
 
 	my_name = argv[0];
 	pid_file = argv[1];
