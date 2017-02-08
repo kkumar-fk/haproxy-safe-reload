@@ -32,20 +32,20 @@
  *	2. Find the process id of the required safe_reload program - say 'P'
  *	3. Run: "kill -USR1 $P"
  *
- * For use with nbproc, the configuration file has these contents, for e.g.
+ * For use with nbproc, the configuration file needs to be modified. f.e.,
  * with nbproc=3:
  *
  * global
  *	nbproc 3
- * 
+ *
  * frontend fe-safe
  *	bind "fd@${FD_HOST1}" process 1
  *	bind "fd@${FD_HOST2}" process 2
  *	bind "fd@${FD_HOST2}" process 3
- * 
+ *
  * Invoke as: safe_reload /var/run/ha1/pid \
- * 10.47.8.252:80:FD_HOST1,10.47.8.252:80:FD_HOST2,10.47.8.252:80:FD_HOST3 \
- * /usr/sbin/haproxy -f haproxy-safe-nbproc.cfg
+ *	10.1.1.2:80:FD_HOST1,10.1.1.2:80:FD_HOST2,1.1.2:80:FD_HOST3 \
+ *	/usr/sbin/haproxy -f haproxy-safe-nbproc.cfg
  */
 
 /* Constants for array sizes */
@@ -68,7 +68,7 @@
 
 /* For signal handling */
 static volatile sig_atomic_t reload_signal = 1;
-static volatile sig_atomic_t child_signal = 0;
+static volatile sig_atomic_t child_signal  = 0;
 
 /*
  * This is initialized internally from socket fd's created and
@@ -151,7 +151,7 @@ static void log_action_arguments(char *args[])
  * Copy the list of PIDs of current haproxy process's into pids, and return
  * the count of running processes.
  */
-static int get_haproxy_pid(char pids[][PID_BUFFER_SIZE])
+static int get_haproxy_pids(char pids[][PID_BUFFER_SIZE])
 {
 	FILE *fp = fopen(pid_file, "r");
 	char tmp[PID_BUFFER_SIZE];
@@ -189,7 +189,7 @@ static void reload_signal_handler(int argc, char *argv[])
 	 * should not matter. We will atmost do an unnecessary reload as an
 	 * effect of this race. Hence this code is commented out for now.
 	 */
-	
+
 	/* First mask signals */
 	sigfillset(&mask_set);
 	sigprocmask(SIG_SETMASK, &mask_set, &old_set);
@@ -199,13 +199,16 @@ static void reload_signal_handler(int argc, char *argv[])
 	sigprocmask(SIG_SETMASK, &old_set, NULL);
 #endif
 
+	/* First copy haproxy path and all it's arguments */
 	for (index = 0; index < argc; index++)
 		args[index] = argv[index];
 
-	npids = get_haproxy_pid(pid_buffer);
+	/* Next create -p with the pid file path */
+	npids = get_haproxy_pids(pid_buffer);
 	args[index++] = "-p";
 	args[index++] = pid_file;
 
+	/* Finally reload option with -sf and list of pids */
 	if (npids) {
 		args[index++] = "-sf";
 		/* TODO: Make sure args does not overflow */
@@ -213,6 +216,7 @@ static void reload_signal_handler(int argc, char *argv[])
 			args[index++] = pid_buffer[p];
 	}
 
+	/* Terminate arguments and invoke haproxy */
 	args[index] = NULL;
 
 	/* Add a log entry for action and arguments */
@@ -242,10 +246,10 @@ static void reload_signal_handler(int argc, char *argv[])
 static void child_signal_handler(void)
 {
 	int status;
-	pid_t pid;
 
 	child_signal = 0;
-	while ((pid = waitpid( -1, &status, WNOHANG)) > 0);
+	while (waitpid(-1, &status, WNOHANG) > 0);
+		/* One child exited, try for more */
 
 	signal(SIGCHLD, child_handler);
 }
@@ -393,7 +397,7 @@ static void do_setup(int total)
 static void usage(char *name)
 {
 	fprintf(stderr,
-		"%s pid-file vip-port-tag-args haproxy-path <haproxy-args>\n",
+		"%s pid-file vip:port:tag,... haproxy-path <haproxy-args>\n",
 		name);
 	exit(1);
 }
@@ -449,7 +453,7 @@ void main(int argc, char *argv[])
 	}
 
 	/*
-	 * Wait till there is a signal from user to reload, or from a 
+	 * Wait till there is a signal from user to reload, or from a
 	 * child that it has exited.
 	 */
 	while (1) {
