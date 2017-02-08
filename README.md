@@ -7,7 +7,7 @@ haproxy process. Invoke with the following arguments:
 
 1)   HAProxy PID file (run time pid file, or a new file to store pid)
 2)   List of vip,port,tag as arguments, E.g.:
-	10.47.8.252:80:FD_HOST1,10.47.8.252:443:FD_HOST2
+	10.0.0.1:80:FD_HOST1,10.0.0.1:443:FD_HOST2
 3)   HAproxy executable path
 4-n) haproxy arguments (no -sf or -p options, safe_reload will add it
 	automatically using the pid file).
@@ -80,6 +80,9 @@ Invoke safe_reload as follows:
 	10.47.8.25:80:FD_HOST1,10.47.8.25:80:FD_HOST2,10.47.8.25:80:FD_HOST3 \
 	/usr/sbin/haproxy -f haproxy-safe-nbproc.cfg
 
+Tested with 40 nbproc (with appropriate changes to configuration file) as:
+	./safe_reload /var/run/ha1/pid 10.0.0.1:80:FD_HOST1,10.0.0.1:80:FD_HOST2,10.0.0.1:80:FD_HOST3,10.0.0.1:80:FD_HOST4,10.0.0.1:80:FD_HOST5,10.0.0.1:80:FD_HOST6,10.0.0.1:80:FD_HOST7,10.0.0.1:80:FD_HOST8,10.0.0.1:80:FD_HOST9,10.0.0.1:80:FD_HOST10,10.0.0.1:80:FD_HOST11,10.0.0.1:80:FD_HOST12,10.0.0.1:80:FD_HOST13,10.0.0.1:80:FD_HOST14,10.0.0.1:80:FD_HOST15,10.0.0.1:80:FD_HOST16,10.0.0.1:80:FD_HOST17,10.0.0.1:80:FD_HOST18,10.0.0.1:80:FD_HOST19,10.0.0.1:80:FD_HOST20,10.0.0.1:80:FD_HOST21,10.0.0.1:80:FD_HOST22,10.0.0.1:80:FD_HOST23,10.0.0.1:80:FD_HOST24,10.0.0.1:80:FD_HOST25,10.0.0.1:80:FD_HOST26,10.0.0.1:80:FD_HOST27,10.0.0.1:80:FD_HOST28,10.0.0.1:80:FD_HOST29,10.0.0.1:80:FD_HOST30,10.0.0.1:80:FD_HOST31,10.0.0.1:80:FD_HOST32,10.0.0.1:80:FD_HOST33,10.0.0.1:80:FD_HOST34,10.0.0.1:80:FD_HOST35,10.0.0.1:80:FD_HOST36,10.0.0.1:80:FD_HOST37,10.0.0.1:80:FD_HOST38,10.0.0.1:80:FD_HOST39,10.0.0.1:80:FD_HOST40 /usr/sbin/haproxy -f haproxy-safe-nbproc-40.cfg
+
 
 E. Configuration supported:
 ----------------------------
@@ -108,7 +111,7 @@ F. Testing done:
 	2. Run ab from 2 different baremetals using this script:
 		while :
 		do
-			ab -c 10000 -n 100000 http://10.47.8.252/128
+			ab -c 10000 -n 100000 http://10.0.0.1/128
 		done > /tmp/out 2>&1 &
 		sleep 600
 		kill %%
@@ -130,8 +133,6 @@ G. Performance Results on 16.04 box:
 						(634% increase)
 	Total failures:			0
 	Failure rate:			0%
-
-Testing with nbproc not yet done for both original vs new.
 
 
 H. Configd/other utility changes:
