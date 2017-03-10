@@ -150,3 +150,7 @@ I. TODO:
 	- Code to parse arguments can be made more robust. String parsing
 	  to be made robust if wrong string is passed.
 	- To be integration with systemd.
+	- Ability to read configuration (safe-reload-config) from a file
+	  instead of stdin.
+	- Ability to add a new VIP from same configuration file via
+	  signal (need to preserve safe-reload-config file path at first run).
