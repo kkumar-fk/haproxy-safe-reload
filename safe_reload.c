@@ -15,17 +15,15 @@
  * The following arguments are provided by the user:
  *
  *	0:	This program name (by the system)
- *	1:	HAProxy PID file
- *	2:	List of "VIP1:port1:tag1,VIP2:port2:tag2,...."
- *		E.g.: ./safe_reload /var/run/ha1/pid \
+ *	1:	List of "VIP1:port1:tag1,VIP2:port2:tag2,...."
+ *		E.g.: ./safe_reload \
  *			10.47.8.252:80:FD_HOST1,10.47.8.252:443:FD_HOST2 \
- *			/usr/sbin/haproxy -f /etc/haproxy/hap-safe-reload.cfg
- *	3:	HAproxy executable path
- *	4-n:	haproxy arguments (no -sf or -p options, we add it ourselves)
+ *			-f /etc/haproxy/hap-safe-reload.cfg -p /var/run/ha1/pid 
+ *	2-n:	haproxy arguments (no -sf option, we add it ourselves)
  *
- * All arguments from #3 onwards are passed to haproxy unmodified. We also add
- * HAProxy's '-p' and '-sf' options with correct arguments, and these should
- * not be provided by the invoker.
+ * All arguments from #2 onwards are passed to haproxy unmodified. We also add
+ * HAProxy's '-sf' options with correct arguments, and this should not be
+ * provided by the invoker.
  *
  * Execute the following steps to reload the configuration:
  *	1. Make modifications as needed to the required configuration file.
@@ -43,9 +41,9 @@
  *	bind "fd@${FD_HOST2}" process 2
  *	bind "fd@${FD_HOST2}" process 3
  *
- * Invoke as: safe_reload /var/run/ha1/pid \
+ * Invoke as: safe_reload \
  *	10.1.1.2:80:FD_HOST1,10.1.1.2:80:FD_HOST2,1.1.2:80:FD_HOST3 \
- *	/usr/sbin/haproxy -f haproxy-safe-nbproc.cfg
+ *	-f haproxy-safe-nbproc.cfg -p /var/run/ha1/pid
  */
 
 /* Constants for array sizes */
@@ -55,8 +53,8 @@
 #define ERROR_SIZE		256		/* Size of error message */
 #define NUM_PIDS		128		/* Maximum nbproc setting */
 #define MAX_HAPROXY_ARGS	32		/* Max haproxy args */
-#define MAX_ARGS		(MAX_HAPROXY_ARGS + NUM_PIDS + 4)
-				/* "+ 4" for "-p <file> -sf" and NULL args */
+#define MAX_ARGS		(MAX_HAPROXY_ARGS + NUM_PIDS + 2)
+				/* "+ 2" for "-sf" and NULL args */
 #define PID_BUFFER_SIZE		16		/* Integer size at most */
 
 /* Constants for parsing input */
@@ -79,12 +77,13 @@ static volatile sig_atomic_t child_signal  = 0;
 static int  fds[MAX_VIPS];
 
 /* These are initialized from parameters supplied by the user */
-static char vip_ips[MAX_VIPS][VIP_SIZE];
-static int  vip_ports[MAX_VIPS];
-static char tags[MAX_VIPS][TAG_SIZE];
+static struct {
+	int  vip_port;
+	char vip_ip[VIP_SIZE];
+	char vip_tag[TAG_SIZE];
+} vip_details[MAX_VIPS];
 
 /* Globals required */
-static char *executable_path;
 static char *my_name;
 static char *pid_file;
 static FILE *logfp;
@@ -130,7 +129,7 @@ static void log_info(char *msg)
 }
 
 /* Log the reconfiguration action with it's arguments */
-static void log_action_arguments(char *args[])
+static void log_action_arguments(int argc, char *args[])
 {
 	int index = 0;
 	char date_string[DATE_STRING_LEN];
@@ -139,7 +138,7 @@ static void log_action_arguments(char *args[])
 
 	fprintf(logfp, "%s: %s (%d) is going to reload configuration.\n",
 		date_string, my_name, getpid());
-	fprintf(logfp, "Arguments: ");
+	fprintf(logfp, "Executing command (#args: %d): ", argc);
 	while (args[index]) {
 		fprintf(logfp, "%s ", args[index]);
 		index++;
@@ -176,12 +175,55 @@ static int get_haproxy_pids(char pids[][PID_BUFFER_SIZE])
 	return npids;
 }
 
+void print_args(char *args[])
+{
+	int index = 0;
+
+	while (args[index]) {
+		printf("%s ", args[index]);
+		index++;
+	}
+	printf("\n");
+}
+
+static int add_child_args(int argc, char *argv[], char *child_args[],
+			  char pid_buffer[NUM_PIDS][PID_BUFFER_SIZE])
+{
+	int  pid, npids, index;
+
+	/* First copy haproxy command name */
+	child_args[0] = "haproxy";
+
+	/* Next copy haproxy path and all it's arguments */
+	for (index = 0; index < argc; index++)
+		child_args[index + 1] = argv[index];
+
+	/* Increment index by 1 for "haproxy" that was added */
+	index++;
+
+	/* Next find list of existing pids to be killed, and pass to haproxy */
+	npids = get_haproxy_pids(pid_buffer);
+
+	/* Reload option with -sf and list of pids */
+	if (npids) {
+		/* NOTE: child_args should not overflow */
+		child_args[index++] = "-sf";
+		for (pid = 0; pid < npids; pid++)
+			child_args[index++] = pid_buffer[pid];
+	}
+
+	/* Terminate arguments */
+	child_args[index] = NULL;
+
+	return index;
+}
+
 /* Delayed handler to implement safe HAProxy reload. */
 static void reload_signal_handler(int argc, char *argv[])
 {
-	char *args[MAX_ARGS];
 	char pid_buffer[NUM_PIDS][PID_BUFFER_SIZE];
-	int  pid, npids, index, ret;
+	char *args[MAX_ARGS];
+	int total_args, ret;
 
 	reload_signal = 0;
 
@@ -201,29 +243,13 @@ static void reload_signal_handler(int argc, char *argv[])
 	sigprocmask(SIG_SETMASK, &old_set, NULL);
 #endif
 
-	/* First copy haproxy path and all it's arguments */
-	for (index = 0; index < argc; index++)
-		args[index] = argv[index];
-
-	/* Next create -p with the pid file path */
-	npids = get_haproxy_pids(pid_buffer);
-	args[index++] = "-p";
-	args[index++] = pid_file;
-
-	/* Finally reload option with -sf and list of pids */
-	if (npids) {
-		/* NOTE: args should not overflow */
-		args[index++] = "-sf";
-		for (pid = 0; pid < npids; pid++)
-			args[index++] = pid_buffer[pid];
-	}
-
-	/* Terminate arguments and invoke haproxy */
-	args[index] = NULL;
+	/* Create arguments to pass to child */
+	total_args = add_child_args(argc, argv, args, pid_buffer);
 
 	/* Add a log entry for action and arguments */
-	log_action_arguments(args);
+	log_action_arguments(total_args, args);
 
+	/* And invoke haproxy */
 	if ((ret = fork()) == 0) {
 		char error_string[ERROR_SIZE];
 
@@ -298,18 +324,18 @@ static int parse_arguments(char *my_arguments)
 			}
 			tag_end = my_arguments - 1;
 
-			strncpy(vip_ips[count], vip_start,
+			strncpy(vip_details[count].vip_ip, vip_start,
 				vip_end - vip_start + 1);
-			vip_ips[count][vip_end - vip_start + 1] = 0;;
+			vip_details[count].vip_ip[vip_end - vip_start + 1] = 0;
 
 			strncpy(port, port_start, port_end - port_start + 1);
 			port[port_end - port_start + 1] = 0;;
 
-			strncpy(tags[count], tag_start,
+			strncpy(vip_details[count].vip_tag, tag_start,
 				tag_end - tag_start + 1);
-			tags[count][tag_end - tag_start + 1] = 0;;
+			vip_details[count].vip_tag[tag_end-tag_start+1] = 0;;
 
-			vip_ports[count] = atoi(port);
+			vip_details[count].vip_port = atoi(port);
 
 			++count;
 			if (!*my_arguments)
@@ -370,11 +396,12 @@ static void do_setup(int total)
 		}
 
 		server.sin_family = AF_INET;
-		server.sin_port = htons(vip_ports[i]);
-		ret = inet_pton(AF_INET, vip_ips[i], &server.sin_addr);
+		server.sin_port = htons(vip_details[i].vip_port);
+		ret = inet_pton(AF_INET, vip_details[i].vip_ip,
+				&server.sin_addr);
 		if (ret != 1) {
 			fprintf(stderr, "inet_pton for VIP: %s, ret: %d\n",
-				vip_ips[i], ret);
+				vip_details[i].vip_ip, ret);
 			exit(1);
 		}
 
@@ -386,7 +413,7 @@ static void do_setup(int total)
 
 		/* Set environmental tag variable to contain the socket fd */
 		sprintf(fdbuffer, "%d", fds[i]);
-		if (setenv(tags[i], fdbuffer, 1)) {
+		if (setenv(vip_details[i].vip_tag, fdbuffer, 1)) {
 			perror("setenv");
 			exit(1);
 		}
@@ -399,7 +426,7 @@ static void do_setup(int total)
 static void usage(char *name)
 {
 	fprintf(stderr,
-		"%s pid-file vip:port:tag,... haproxy-path <haproxy-args>\n",
+		"%s vip:port:tag,... haproxy-path <haproxy-args>\n",
 		name);
 	exit(1);
 }
@@ -413,27 +440,46 @@ static void enable_logging(void)
 	}
 }
 
+/* Note: argv[] is always NULL terminated */
+static char *find_pid_file(char *argv[])
+{
+	int index = 0;
+
+	while (argv[index]) {
+		if (!strcmp(argv[index], "-p"))
+			return argv[index + 1];	/* can be NULL */
+		index++;
+	}
+
+	return NULL;
+}
+
 void main(int argc, char *argv[])
 {
 	char *my_arguments;
+	int num_haproxy_args;
+	char **haproxy_args;
 	int total;
 
-	if (argc <= 5) {
+	if (argc < 6) {
 		usage(argv[0]);
-	} else if (argc -3 > MAX_HAPROXY_ARGS) {
+	} else if (argc - 1 > MAX_HAPROXY_ARGS) {
 		fprintf(stderr, "%s: Maximum of %d arguments for haproxy\n",
 			argv[0], MAX_HAPROXY_ARGS);
 		exit(1);
 	}
 
 	my_name = argv[0];
-	pid_file = argv[1];
-	my_arguments = argv[2];
-	executable_path = argv[3];
+	my_arguments = argv[1];
+
+
+	pid_file = find_pid_file(&argv[2]);
+	if (!pid_file) {
+		fprintf(stderr, "%s: -p <pid-file> is mandatory\n", argv[0]);
+		exit(1);
+	}
 
 	enable_logging();
-
-	log_info("Starting up");
 
 	total = parse_arguments(my_arguments);
 	if (!total) {
@@ -459,18 +505,27 @@ void main(int argc, char *argv[])
 		setsid();
 	}
 
+	log_info("Starting up");
+
+	/*
+	 * We were invoked as follows:
+	 *	./safe_reload tags -f safe-hap.cfg -p pid-file ...
+	 */
+	num_haproxy_args = argc - 2;
+	haproxy_args = &argv[2];
+
 	/*
 	 * Wait till there is a signal from user to reload, or from a
 	 * child that it has exited.
 	 */
 	while (1) {
-		/* Need configuration reload? */
+		/* Check if we need configuration reload */
 		if (reload_signal) {
-			/* Send arguments starting from haproxy executable */
-			reload_signal_handler(argc - 3, &argv[3]);
+			/* Ask HAProxy to reload */
+			reload_signal_handler(num_haproxy_args, haproxy_args);
 		}
 
-		/* Need to reap child? */
+		/* Check if we need to reap child */
 		if (child_signal) {
 			child_signal_handler();
 		}
