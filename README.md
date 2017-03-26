@@ -154,3 +154,27 @@ I. TODO:
 	  instead of stdin.
 	- Ability to add a new VIP from same configuration file via
 	  signal (need to preserve safe-reload-config file path at first run).
+
+
+J. File Format:
+---------------
+
+Create a file as follows:
+
+# cat > /tmp/tmpl.cfg << EOF
+ARGUMENTS -f /etc/haproxy/haproxy-safe-nbproc-2.cfg -p /var/run/ha1/pid
+VIP 10.47.8.252
+PORT 80
+TAG FD_HOST1
+VIP 10.47.8.252
+PORT 443
+TAG FD_HOST2
+EOF
+
+And then run safe_reload passing this file as a paramter:
+
+# ./safe_reload /tmp/tmpl.cfg
+
+For reload, send SIGUSR1 to this process:
+# pkill -USR1 safe_reload
+
