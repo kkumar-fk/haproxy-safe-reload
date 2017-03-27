@@ -21,8 +21,8 @@
  *	VIP <vip>
  *	PORT <port#>
  *	TAG <tag>
- * VIP, PORT and TAG can repeat as many times as required. The combination
- * of VIP & PORT MUST be unique. Also each TAG MUST be unique.
+ * VIP, PORT and TAG can repeat as many times as required. Each TAG MUST
+ * be unique.
  *
  * However, if the user provides command line arguments, it is in the
  * following order:
@@ -236,15 +236,15 @@ void print_args(char *args[])
 }
 
 /*
- * This function add's "-sf <pid1 pid2 ...>", and creates full HAProxy
- * argument list.
+ * This function creates HAProxy argument list from haproxy_args[], and
+ * adds "-sf <pid1 pid2 ...>" to create the full HAProxy arguments.
  */
 int add_haproxy_args(char *child_args[],
 		     char pid_buffer[NUM_PIDS][PID_BUFFER_SIZE])
 {
 	int  pid, npids, index;
 
-	/* First copy haproxy cmd name, and all it's arguments */
+	/* First copy haproxy cmd name, and all static arguments */
 	for (index = 0; index <= num_haproxy_args; index++)
 		child_args[index] = haproxy_args[index];
 
@@ -266,7 +266,7 @@ int add_haproxy_args(char *child_args[],
 	return index;
 }
 
-int get_socket(int i)
+int get_haproxy_socket(int i)
 {
 	struct sockaddr_in server;
 	int ret, opt = 1;
@@ -376,7 +376,7 @@ int validate_old_new_configs(void)
 		}
 
 		/* Did not match any earlier socket, open new socket */
-		if (get_socket(i)) {
+		if (get_haproxy_socket(i)) {
 			log_info(strerror(errno));
 			/* Any error handling more? Reload may fail. */
 		} else
@@ -542,7 +542,6 @@ int validate_user_data(void)
  * TODO:
  *	- In all cases, args must be done out of this function, static
  *	  for command line and dynamic for file based.
- *	- Only one function should add arguments for haproxy, not two.
  */
 void reload_signal_handler(void)
 {
@@ -644,24 +643,6 @@ void child_signal_handler(void)
  *	4. Bind each socket to the VIP:port, but do not LISTEN
  *	5. Export the tag environment variable with the fd of this socket.
  */
-void do_initial_setup(void)
-{
-	int i;
-
-	signal(SIGUSR1, reload_handler);
-	signal(SIGCHLD, child_handler);
-
-	for (i = 0; i < total_vips; i++) {
-		if (get_socket(i))
-			exit(1);
-	}
-
-	/* First time */
-	bcopy(vip_details, vip_details_old, sizeof(vip_details));
-	total_vips_old = total_vips;
-	action_taken = 1;
-}
-
 /*
  * Print the command line usage and exit.
  */
@@ -704,7 +685,7 @@ int create_haproxy_args(int total_args, char *args[])
 
 	haproxy_args[0] = strdup(HAPROXY_EXECUTABLE);
 	for (i = 0; i < total_args; i++)
-		haproxy_args[i + 1] = args[i];	/* TODO: check limits? */
+		haproxy_args[i + 1] = args[i];
 	/* This is NULL terminated anyway */
 
 	return total_args;
@@ -834,19 +815,9 @@ int reread_config_file(void)
 	return 1;
 }
 
-void main(int argc, char *argv[])
+void do_initial_setup(int argc, char *argv[])
 {
-	if (argc == 2) {
-		my_filename = argv[1];
-	} else if (argc < 6) {
-		usage(argv[0]);
-	} else if (argc - 1 > MAX_HAPROXY_ARGS) {
-		fprintf(stderr, "%s: Maximum of %d arguments for haproxy\n",
-			argv[0], MAX_HAPROXY_ARGS);
-		exit(1);
-	}
-
-	my_name = argv[0];
+	int i;
 
 	if (my_filename) {
 		total_vips = parse_file(my_filename, &num_haproxy_args);
@@ -883,9 +854,35 @@ void main(int argc, char *argv[])
 
 	log_info("Starting up");
 
-	do_initial_setup();
+	bcopy(vip_details, vip_details_old, sizeof(vip_details));
+	total_vips_old = total_vips;
+	action_taken = 1;
 
-#if 0
+	signal(SIGUSR1, reload_handler);
+	signal(SIGCHLD, child_handler);
+
+	for (i = 0; i < total_vips; i++) {
+		if (get_haproxy_socket(i))
+			exit(1);
+	}
+}
+
+void main(int argc, char *argv[])
+{
+	if (argc == 2) {
+		my_filename = argv[1];
+	} else if (argc < 6) {
+		usage(argv[0]);
+	} else if (argc - 1 > MAX_HAPROXY_ARGS) {
+		fprintf(stderr, "%s: Maximum of %d arguments for haproxy\n",
+			argv[0], MAX_HAPROXY_ARGS);
+		exit(1);
+	}
+
+	my_name = argv[0];
+
+	do_initial_setup(argc, argv);
+
 	if (daemon(1, 1)) {
 		int ret;
 
@@ -901,7 +898,6 @@ void main(int argc, char *argv[])
 		/* Child -> Start a new session and continue */
 		setsid();
 	}
-#endif
 
 	/*
 	 * Wait till there is a signal from user to reload, or from a
