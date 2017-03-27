@@ -80,6 +80,10 @@
 #define DATE_STRING_LEN		64	/* atleast 26 bytes */
 #define LOGFILE			"/var/log/safe_reload.log"
 
+/* Fork result */
+#define CHILD			0
+#define PARENT			1
+
 /* For signal handling */
 volatile sig_atomic_t reload_signal = 1;
 volatile sig_atomic_t child_signal  = 0;
@@ -120,6 +124,9 @@ char debug_str[512];
 /* Whether any action was taken during re-configuration */
 int action_taken = 0;
 
+/* Number of times load/reload happened */
+int reload_times = 0;
+
 /* Inform main() that a configuration reload is required */
 void reload_handler(int arg)
 {
@@ -147,6 +154,13 @@ void get_printable_time(char *date_string)
 		date_string[strlen(date_string) - 1] = 0;
 }
 
+void log_end_of_block(void)
+{
+	fprintf(logfp,
+		"----------------------------------------------------------\n");
+	fflush(logfp);
+}
+
 /* Log information or errors */
 void log_info(char *msg)
 {
@@ -154,9 +168,7 @@ void log_info(char *msg)
 
 	get_printable_time(date_string);
 
-	fprintf(logfp, "%s: %s (%d): %s\n", date_string, my_name, getpid(),
-		msg);
-	fprintf(logfp, "--------------------------------------------------\n");
+	fprintf(logfp, "%s: PID: %d, %s\n", date_string, getpid(), msg);
 	fflush(logfp);
 }
 
@@ -164,16 +176,15 @@ void log_info(char *msg)
 void log_action_arguments(int argc, char *args[])
 {
 	int index = 0;
-	static int reload_times = 0;
 	char date_string[DATE_STRING_LEN];
 	char *str;
 
 	get_printable_time(date_string);
 
 	if (!reload_times)
-		str = "Loading";
+		str = "Loading HAProxy";
 	else
-		str = "Re-loading";
+		str = "Re-loading HAProxy";
 
 	fprintf(logfp, "%s (%d): %s configuration (%d).\n",
 		date_string, getpid(), str, reload_times);
@@ -184,10 +195,6 @@ void log_action_arguments(int argc, char *args[])
 		index++;
 	}
 	fprintf(logfp, "\n");
-	fprintf(logfp, "--------------------------------------------------\n");
-	fflush(logfp);
-
-	reload_times++;
 }
 
 /*
@@ -228,16 +235,18 @@ void print_args(char *args[])
 	printf("\n");
 }
 
-/* This function is mainly to add "-sf <pid1 pid2 ...>" */
-/* TODO */
-int add_child_args(int argc, char *argv[], char *child_args[],
-			       char pid_buffer[NUM_PIDS][PID_BUFFER_SIZE])
+/*
+ * This function add's "-sf <pid1 pid2 ...>", and creates full HAProxy
+ * argument list.
+ */
+int add_haproxy_args(char *child_args[],
+		     char pid_buffer[NUM_PIDS][PID_BUFFER_SIZE])
 {
 	int  pid, npids, index;
 
 	/* First copy haproxy cmd name, and all it's arguments */
-	for (index = 0; index <= argc; index++)
-		child_args[index] = argv[index];
+	for (index = 0; index <= num_haproxy_args; index++)
+		child_args[index] = haproxy_args[index];
 
 	/* Next find list of existing pids to be killed, and pass to haproxy */
 	npids = get_haproxy_pids(pid_buffer);
@@ -304,7 +313,7 @@ int get_socket(int i)
 		return errno;
 	}
 
-	sprintf(debug_str, "Opened new socket, tag: %s fd: %d\n",
+	sprintf(debug_str, "Opened socket, tag: %s fd: %d\n",
 		vip_details[i].vip_tag, vip_details[i].vip_fd);
 	log_info(debug_str);
 
@@ -372,12 +381,13 @@ int validate_old_new_configs(void)
 			/* Any error handling more? Reload may fail. */
 		} else
 			action_taken = 1;
+
 	}
 
 	return 1;
 }
 
-void close_unused_sockets(void)
+void close_unused_sockets(int type)
 {
 	int i;
 	int new_index;
@@ -389,10 +399,15 @@ void close_unused_sockets(void)
 
 		if (new_index == -1) {
 			close(vip_details_old[i].vip_fd);
-			sprintf(debug_str, "Closed Tag: %s fd: %d\n",
-				vip_details_old[i].vip_tag,
-				vip_details_old[i].vip_fd);
-			log_info(debug_str);
+			if (type == PARENT) {
+				sprintf(debug_str,
+					"Closed socket, tag: %s fd: %d\n",
+					vip_details_old[i].vip_tag,
+					vip_details_old[i].vip_fd);
+				log_info(debug_str);
+			} else	
+				unsetenv(vip_details_old[i].vip_tag);
+
 			action_taken = 1;
 		}
 	}
@@ -525,50 +540,15 @@ int validate_user_data(void)
  * would have resulted in dropped connections during the reload.
  *
  * TODO:
- *	- For file reload, need to preserve old arguments, and find
- *	  which new arguments to create sockets, etc.
  *	- In all cases, args must be done out of this function, static
  *	  for command line and dynamic for file based.
  *	- Only one function should add arguments for haproxy, not two.
- *	- All paths to be cleaned up - argv parsing, etc.
  */
-void reload_signal_handler(int argc, char *argv[])
+void reload_signal_handler(void)
 {
 	char pid_buffer[NUM_PIDS][PID_BUFFER_SIZE];
 	char *args[MAX_ARGS];
 	int total_args, ret;
-static int first_time = 1;
-
-	action_taken = 0;
-	if (my_filename && !first_time) {
-		/* Backup old arguments, and create new arguments */
-		bcopy(vip_details, vip_details_old, sizeof(vip_details));
-		total_vips_old = total_vips;
-
-		/* And reset these */
-		bzero(vip_details, sizeof(vip_details));
-		total_vips = 0;
-
-		/* Read the configuration again */
-		total_vips = parse_file(my_filename, &num_haproxy_args);
-
-		/* Validate that user has not giving any bad data */
-		if (!validate_user_data()) {
-			log_info("Bad duplicate tag");
-			return;
-		}
-
-		/* Make sure old and new configurations are compatible */
-		if (!validate_old_new_configs()) {
-			log_info("New configuration not compatible with old");
-			/* Restore earlier arguments */
-			bcopy(vip_details_old, vip_details,
-			      sizeof(vip_details));
-			total_vips = total_vips_old;
-			return;
-		}
-		log_info("New configuration is compatible with old");
-	}
 
 	reload_signal = 0;
 
@@ -588,8 +568,8 @@ static int first_time = 1;
 	sigprocmask(SIG_SETMASK, &old_set, NULL);
 #endif
 
-	/* Create arguments to pass to child */
-	total_args = add_child_args(argc, argv, args, pid_buffer);
+	/* Create arguments to pass to HAProxy */
+	total_args = add_haproxy_args(args, pid_buffer);
 
 	/* Add a log entry for action and arguments */
 	log_action_arguments(total_args, args);
@@ -600,14 +580,15 @@ static int first_time = 1;
 
 		if (my_filename) {
 			/* Child needs to close unused fd's. */
-			close_unused_sockets();
+			close_unused_sockets(CHILD);
 		}
 
 		/* New process -> Child */
 		execvp(args[0], args);
 
 		/* Should never reach here */
-		sprintf(error_string, "%s:%s", argv[0], strerror(errno));
+		sprintf(error_string, "%s:%s", haproxy_args[0],
+			strerror(errno));
 		log_info(error_string);
 		exit(1);
 	} else if (ret < 0) {
@@ -620,8 +601,6 @@ static int first_time = 1;
 		;
 	}
 
-first_time = 0;
-
 	/* Parent returns to pause for more signals, or exit */
 	signal(SIGUSR1, reload_handler);
 }
@@ -630,6 +609,7 @@ first_time = 0;
 void child_signal_handler(void)
 {
 	int status;
+	char *str;
 
 	child_signal = 0;
 	while (waitpid(-1, &status, WNOHANG) > 0);
@@ -637,13 +617,20 @@ void child_signal_handler(void)
 
 	/* Now that old haproxy is dead, close all unused sockets */
 	if (my_filename)
-		close_unused_sockets();
+		close_unused_sockets(PARENT);
+
+	if (!reload_times)
+		str = "Loading";
+	else
+		str = "Re-loading";
 
 	if (action_taken)
-		sprintf(debug_str, "Action taken during reload");
+		sprintf(debug_str, "Action taken during %s", str);
 	else
-		sprintf(debug_str, "No action required during reload");
+		sprintf(debug_str, "No action required during %s", str);
 	log_info(debug_str);
+
+	log_end_of_block();
 
 	action_taken = 0;
 	signal(SIGCHLD, child_handler);
@@ -668,6 +655,11 @@ void do_initial_setup(void)
 		if (get_socket(i))
 			exit(1);
 	}
+
+	/* First time */
+	bcopy(vip_details, vip_details_old, sizeof(vip_details));
+	total_vips_old = total_vips;
+	action_taken = 1;
 }
 
 /*
@@ -797,6 +789,51 @@ int parse_cmdline_arguments(int total_args, char *tag_arguments,
 	return count;
 }
 
+int reread_config_file(void)
+{
+	static int first_time = 1;
+
+	if (first_time) {
+		first_time = 0;
+		return 1;
+	}
+
+	action_taken = 0;
+	if (my_filename) {
+		/* Backup old arguments, and create new arguments */
+		bcopy(vip_details, vip_details_old, sizeof(vip_details));
+		total_vips_old = total_vips;
+
+		/* And reset these */
+		bzero(vip_details, sizeof(vip_details));
+		total_vips = 0;
+
+		/* Read the configuration again */
+		total_vips = parse_file(my_filename, &num_haproxy_args);
+
+		/* Validate that user has not giving any bad data */
+		if (!validate_user_data()) {
+			log_info("Bad duplicate tag");
+			return 0;
+		}
+
+		/* Make sure old and new configurations are compatible */
+		if (!validate_old_new_configs()) {
+			log_info("New configuration not compatible with old");
+			/* Restore earlier arguments */
+			bcopy(vip_details_old, vip_details,
+			      sizeof(vip_details));
+			total_vips = total_vips_old;
+			return 0;
+		}
+
+		reload_times++;
+		log_info("New configuration is compatible with old");
+	}
+
+	return 1;
+}
+
 void main(int argc, char *argv[])
 {
 	if (argc == 2) {
@@ -873,8 +910,8 @@ void main(int argc, char *argv[])
 	while (1) {
 		/* Check if we need configuration reload */
 		if (reload_signal) {
-			/* Ask HAProxy to reload */
-			reload_signal_handler(num_haproxy_args, haproxy_args);
+			if (reread_config_file())
+				reload_signal_handler();
 		}
 
 		/* Check if we need to reap child */
