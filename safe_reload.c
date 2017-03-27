@@ -525,18 +525,12 @@ int validate_user_data(void)
  * would have resulted in dropped connections during the reload.
  *
  * TODO:
- *	- Need to handle both file and argument reload options
  *	- For file reload, need to preserve old arguments, and find
  *	  which new arguments to create sockets, etc.
  *	- In all cases, args must be done out of this function, static
  *	  for command line and dynamic for file based.
- *	- -p option should be passed by user, not created by us.
- *	- For file based, need a function to validate the file has not
- *	  been badly changed (earlier configs are same or deleted, but
- *	- Convert vip_ips, vip_ports, vip_tags to a structure.
  *	- Only one function should add arguments for haproxy, not two.
- *	  All paths to be cleaned up - argv parsing, etc.
- *	- On file reload, re-read the config file.
+ *	- All paths to be cleaned up - argv parsing, etc.
  */
 void reload_signal_handler(int argc, char *argv[])
 {
