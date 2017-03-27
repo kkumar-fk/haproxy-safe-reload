@@ -11,6 +11,22 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <pthread.h>
+#include <sys/types.h>
+
+#include <unistd.h>
+#include <sys/syscall.h>
+
+int gettid(void)
+{
+#ifdef SYS_gettid
+pid_t tid = syscall(SYS_gettid);
+#else
+#error "SYS_gettid is not available on this system"
+#endif
+
+return tid;
+}
 
 /*
  * Arguments: Either the user can provide a single argument which is a
@@ -76,6 +92,9 @@
 
 #define HAPROXY_EXECUTABLE	"haproxy"
 
+/* Get status of the last reload by connecting to this localhost socket */
+#define RELOAD_PORT		25111
+
 /* Logging */
 #define DATE_STRING_LEN		64	/* atleast 26 bytes */
 #define LOGFILE			"/var/log/safe_reload.log"
@@ -124,8 +143,11 @@ char debug_str[512];
 /* Whether any action was taken during re-configuration */
 int action_taken = 0;
 
-/* Number of times load/reload happened */
-int reload_times = 0;
+/* Number of count load/reload happened */
+int reload_count = 0;
+
+/* Reload status */
+int reload_status = 0;
 
 /* Inform main() that a configuration reload is required */
 void reload_handler(int arg)
@@ -181,13 +203,13 @@ void log_action_arguments(int argc, char *args[])
 
 	get_printable_time(date_string);
 
-	if (!reload_times)
+	if (!reload_count)
 		str = "Loading HAProxy";
 	else
 		str = "Re-loading HAProxy";
 
 	fprintf(logfp, "%s (%d): %s configuration (%d).\n",
-		date_string, getpid(), str, reload_times);
+		date_string, getpid(), str, reload_count);
 	fprintf(logfp, "Executing command (#args: %d): ", argc);
 
 	while (args[index]) {
@@ -542,6 +564,8 @@ int validate_user_data(void)
  * TODO:
  *	- In all cases, args must be done out of this function, static
  *	  for command line and dynamic for file based.
+ *	- API to find last reload status
+ *	- Change from new thread to a poll based.
  */
 void reload_signal_handler(void)
 {
@@ -575,8 +599,6 @@ void reload_signal_handler(void)
 
 	/* And invoke haproxy */
 	if ((ret = fork()) == 0) {
-		char error_string[ERROR_SIZE];
-
 		if (my_filename) {
 			/* Child needs to close unused fd's. */
 			close_unused_sockets(CHILD);
@@ -586,11 +608,11 @@ void reload_signal_handler(void)
 		execvp(args[0], args);
 
 		/* Should never reach here */
-		sprintf(error_string, "%s:%s", haproxy_args[0],
-			strerror(errno));
-		log_info(error_string);
+		sprintf(debug_str, "%s:%s", haproxy_args[0], strerror(errno));
+		log_info(debug_str);
 		exit(1);
 	} else if (ret < 0) {
+		reload_status = errno;
 		log_info("Unable to reconfigure due to fork failure");
 	} else {
 		/*
@@ -618,7 +640,7 @@ void child_signal_handler(void)
 	if (my_filename)
 		close_unused_sockets(PARENT);
 
-	if (!reload_times)
+	if (!reload_count)
 		str = "Loading";
 	else
 		str = "Re-loading";
@@ -795,6 +817,7 @@ int reread_config_file(void)
 		/* Validate that user has not giving any bad data */
 		if (!validate_user_data()) {
 			log_info("Bad duplicate tag");
+			reload_status = 2;
 			return 0;
 		}
 
@@ -805,14 +828,114 @@ int reread_config_file(void)
 			bcopy(vip_details_old, vip_details,
 			      sizeof(vip_details));
 			total_vips = total_vips_old;
+			reload_status = 3;
 			return 0;
 		}
 
-		reload_times++;
 		log_info("New configuration is compatible with old");
+		reload_status = 0;
 	}
 
+	reload_count++;
+
 	return 1;
+}
+
+pthread_t create_thread(void *(*thread_handler) (void *), void *arg)
+{
+	pthread_t thread_id;
+	pthread_attr_t attr;
+
+	if (pthread_attr_init(&attr)) {
+		perror("pthread_attr_init");
+		return -1;
+	}
+
+	if (pthread_create(&thread_id, &attr, thread_handler, arg)) {
+		perror("pthread_create");
+		return -1;
+	}
+
+	pthread_attr_destroy(&attr);
+
+	return thread_id;
+}
+
+int open_server_socket(void)
+{
+	struct sockaddr_in serv;
+	int fd, set = 1;
+
+	memset(&serv, 0, sizeof(serv));
+	serv.sin_family = AF_INET;
+	serv.sin_addr.s_addr = inet_addr("127.0.0.1");
+	serv.sin_port = htons(RELOAD_PORT);
+
+	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+		perror("socket");
+		return -1;
+	}
+
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &set, sizeof(set));
+	if (bind(fd, (struct sockaddr *)&serv, sizeof(struct sockaddr)) < 0) {
+		perror("bind");
+		close(fd);
+		return -1;
+	}
+
+	listen(fd, 10);
+	return fd;
+}
+
+void close_socket(int sockfd)
+{
+	shutdown(sockfd, SHUT_RDWR);
+	close(sockfd);
+}
+
+/* This thread accepts connection on port 25111, and sends last reload status */
+static void *socket_command_handler(void *arg)
+{
+	int sockfd, ret = 0;
+	int childfd;
+
+	if ((sockfd = open_server_socket()) < 0) {
+		/* No error handling required, all connect's will fail */
+		return 0;
+	}
+
+	/* Need to close this thread on main program exit? */
+	while (1) {
+		int ret;
+		struct sockaddr_in dest;
+		socklen_t dlen = sizeof(dest);
+		char buffer[1024];
+
+		childfd = accept(sockfd, (struct sockaddr *)&dest, &dlen);
+		if (childfd < 0) {
+			perror("accept");
+			continue;
+		}
+
+		sprintf(buffer, "Last reload-status: %d, reload-counter: %d\n",
+			reload_status, reload_count);
+		ret = write(childfd, &buffer, strlen(buffer));
+		close_socket(childfd);
+
+		sprintf(debug_str, "Sending reload status %d", reload_status);
+		log_info(debug_str);
+	}
+
+	return 0;
+}
+
+void install_status_handler(void)
+{
+	pthread_t tid;
+
+	tid = create_thread(&socket_command_handler, NULL);
+	if (tid != -1)
+		pthread_detach(tid);
 }
 
 void do_initial_setup(int argc, char *argv[])
@@ -883,6 +1006,7 @@ void main(int argc, char *argv[])
 
 	do_initial_setup(argc, argv);
 
+#if 1
 	if (daemon(1, 1)) {
 		int ret;
 
@@ -898,6 +1022,9 @@ void main(int argc, char *argv[])
 		/* Child -> Start a new session and continue */
 		setsid();
 	}
+#endif
+
+	install_status_handler();
 
 	/*
 	 * Wait till there is a signal from user to reload, or from a
@@ -906,6 +1033,7 @@ void main(int argc, char *argv[])
 	while (1) {
 		/* Check if we need configuration reload */
 		if (reload_signal) {
+			reload_status = 1;	/* Mark as error */
 			if (reread_config_file())
 				reload_signal_handler();
 		}
