@@ -1,9 +1,10 @@
 A. Introduction:
 ----------------
 
-'safe_reload' implements safe reload of haproxy, where new connections
-are not dropped during a reload. safe_reload is in charge of starting
-haproxy process. Invoke with the following arguments:
+'safe_reload' implements safe reload of haproxy, which ensures that
+new connections are not dropped during a haproxy reload. safe_reload is
+in charge of starting haproxy process. Invoke with the following
+arguments:
 
 1)   HAProxy PID file (run time pid file, or a new file to store pid)
 2)   List of vip,port,tag as arguments, E.g.:
