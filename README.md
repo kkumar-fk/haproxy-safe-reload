@@ -1,3 +1,8 @@
+TODO:
+----------
+
+Add varargs support to some functions.
+
 A. Introduction:
 ----------------
 
